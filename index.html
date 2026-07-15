@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Particle Gestures — Interactive 3D Hand-Reactive Particles</title>
+    <meta name="description" content="Real-time 3D particle system controlled by hand gestures via webcam using Three.js and MediaPipe.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- MediaPipe Hands (global scope) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- Three.js import map -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <style>
+        /* ── Reset ── */
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            overflow: hidden;
+            background: #08080f;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #d0d0dc;
+            -webkit-font-smoothing: antialiased;
+        }
+        /* ── 3D Canvas ── */
+        #canvas-container {
+            position: fixed;
+            inset: 0;
+            z-index: 1;
+        }
+        /* Vignette overlay for cinematic depth */
+        #canvas-container::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse at center, transparent 45%, rgba(6, 6, 12, 0.65) 100%);
+            pointer-events: none;
+            z-index: 2;
+        }
+        /* ── Webcam Preview ── */
+        #webcam {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            width: 200px;
+            height: 150px;
+            border-radius: 14px;
+            border: 1.5px solid rgba(255, 255, 255, 0.1);
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 100;
+            opacity: 0;
+            background: #111;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5),
+                        inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+            transition: opacity 0.6s ease;
+        }
+        #webcam.visible {
+            opacity: 0.82;
+        }
+        /* Webcam label */
+        #webcam-label {
+            position: fixed;
+            bottom: 174px;
+            left: 20px;
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.3);
+            z-index: 100;
+            opacity: 0;
+            transition: opacity 0.6s ease;
+        }
+        #webcam-label.visible {
+            opacity: 1;
+        }
+        /* ── Control Panel ── */
+        #control-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 230px;
+            background: rgba(10, 10, 20, 0.72);
+            backdrop-filter: blur(28px) saturate(1.4);
+            -webkit-backdrop-filter: blur(28px) saturate(1.4);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 18px;
+            padding: 22px 20px;
+            z-index: 100;
+            box-shadow: 0 16px 64px rgba(0, 0, 0, 0.55),
+                        inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+        }
+        #control-panel .panel-title {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            margin-bottom: 14px;
+            background: linear-gradient(135deg, #00ffcc 0%, #7b61ff 60%, #ff6ec7 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        /* Hand status indicator */
+        #hand-status {
+            font-size: 12px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            color: #6a6a88;
+            transition: all 0.35s ease;
+        }
+        #hand-status.detected {
+            color: #00ffcc;
+            background: rgba(0, 255, 204, 0.05);
+            border-color: rgba(0, 255, 204, 0.15);
+        }
+        #hand-status .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #3a3a50;
+            flex-shrink: 0;
+            transition: all 0.35s ease;
+        }
+        #hand-status.detected .status-dot {
+            background: #00ffcc;
+            box-shadow: 0 0 10px rgba(0, 255, 204, 0.6);
+        }
+        /* Tension meter */
+        .tension-row {
+            margin-bottom: 4px;
+        }
+        .tension-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: #555;
+            margin-bottom: 5px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        .tension-track {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .tension-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #7b61ff, #00ffcc);
+            border-radius: 2px;
+            transition: width 0.12s ease-out;
+        }
+        /* Divider */
+        .divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.06);
+            margin: 14px 0;
+        }
+        /* Section labels */
+        .section-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.3px;
+            color: #444;
+            margin-bottom: 10px;
+        }
+        /* Template buttons */
+        #template-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        #template-buttons button {
+            width: 100%;
+            padding: 9px 13px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.025);
+            color: #888;
+            font-family: 'Inter', sans-serif;
+            font-size: 12.5px;
+            font-weight: 400;
+            cursor: pointer;
+            transition: all 0.22s ease;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            outline: none;
+        }
+        #template-buttons button:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.1);
+            color: #ccc;
+            transform: translateX(3px);
+        }
+        #template-buttons button:active {
+            transform: translateX(1px);
+        }
+        #template-buttons button.active {
+            background: rgba(0, 255, 204, 0.07);
+            border-color: rgba(0, 255, 204, 0.22);
+            color: #00ffcc;
+            font-weight: 500;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.05);
+        }
+        #template-buttons button .btn-icon {
+            font-size: 15px;
+            width: 20px;
+            text-align: center;
+        }
+        /* Color picker row */
+        .color-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        #color-picker {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 11px;
+            cursor: pointer;
+            background: transparent;
+            padding: 0;
+        }
+        #color-picker::-webkit-color-swatch-wrapper { padding: 2px; }
+        #color-picker::-webkit-color-swatch {
+            border: 2px solid rgba(255, 255, 255, 0.12);
+            border-radius: 9px;
+        }
+        #color-picker::-moz-color-swatch {
+            border: 2px solid rgba(255, 255, 255, 0.12);
+            border-radius: 9px;
+        }
+        #color-hex {
+            font-size: 12.5px;
+            color: #666;
+            font-family: 'Inter', monospace;
+            letter-spacing: 0.5px;
+        }
+        /* ── Loading Overlay ── */
+        #loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: #08080f;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            transition: opacity 0.7s ease, visibility 0.7s ease;
+        }
+        #loading-overlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .loader-ring {
+            width: 44px;
+            height: 44px;
+            border: 3px solid rgba(255, 255, 255, 0.08);
+            border-top-color: #00ffcc;
+            border-radius: 50%;
+            animation: spin 0.9s linear infinite;
+            margin-bottom: 18px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loader-text {
+            font-size: 13px;
+            color: #555;
+            letter-spacing: 0.3px;
+        }
+        .loader-sub {
+            font-size: 11px;
+            color: #333;
+            margin-top: 6px;
+        }
+        /* ── FPS Counter (debug) ── */
+        #fps-counter {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.2);
+            font-family: 'Inter', monospace;
+            z-index: 100;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading overlay -->
+    <div id="loading-overlay">
+        <div class="loader-ring"></div>
+        <div class="loader-text">Initializing particle system…</div>
+        <div class="loader-sub">Loading hand-tracking model</div>
+    </div>
+    <!-- Webcam (used by MediaPipe, displayed as small preview) -->
+    <video id="webcam" autoplay playsinline muted></video>
+    <div id="webcam-label">Live Feed</div>
+    <!-- Three.js canvas container -->
+    <div id="canvas-container"></div>
+    <!-- Control panel -->
+    <div id="control-panel">
+        <div class="panel-title">✦ Particle Gestures</div>
+        <div id="hand-status">
+            <span class="status-dot"></span>
+            <span id="hand-status-text">Waiting for camera…</span>
+        </div>
+        <div class="tension-row">
+            <div class="tension-header">
+                <span>Tension</span>
+                <span id="tension-value">0 %</span>
+            </div>
+            <div class="tension-track">
+                <div class="tension-fill" id="tension-fill"></div>
+            </div>
+        </div>
+        <div class="divider"></div>
+        <div class="section-label">Shape Templates</div>
+        <div id="template-buttons">
+            <button data-template="heart" class="active"><span class="btn-icon">❤️</span>Heart</button>
+            <button data-template="flower"><span class="btn-icon">🌸</span>Flower</button>
+            <button data-template="saturn"><span class="btn-icon">🪐</span>Saturn</button>
+            <button data-template="buddha"><span class="btn-icon">🧘</span>Buddha</button>
+            <button data-template="fireworks"><span class="btn-icon">🎆</span>Fireworks</button>
+        </div>
+        <div class="divider"></div>
+        <div class="section-label">Particle Color</div>
+        <div class="color-row">
+            <input type="color" id="color-picker" value="#00ffcc">
+            <span id="color-hex">#00ffcc</span>
+        </div>
+    </div>
+    <div id="fps-counter"></div>
+    <!-- ────────────────── Main Application ────────────────── -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        // ═══════════════════════════════════════════════════════
+        //  CONSTANTS
+        // ═══════════════════════════════════════════════════════
+        const PARTICLE_COUNT  = 2500;
+        const LERP_SPEED      = 0.032;
+        const SCALE_LERP      = 0.07;
+        const IDLE_TIMEOUT_MS = 600;
+        // ═══════════════════════════════════════════════════════
+        //  STATE
+        // ═══════════════════════════════════════════════════════
+        let currentTemplate   = 'heart';
+        let rawTension        = 0;
+        let smoothTension     = 0;
+        let handsDetected     = false;
+        let lastHandTimestamp = 0;
+        let particleColor     = new THREE.Color(0x00ffcc);
+        // ═══════════════════════════════════════════════════════
+        //  DOM REFS
+        // ═══════════════════════════════════════════════════════
+        const container      = document.getElementById('canvas-container');
+        const videoEl        = document.getElementById('webcam');
+        const webcamLabel    = document.getElementById('webcam-label');
+        const handStatusEl   = document.getElementById('hand-status');
+        const handStatusText = document.getElementById('hand-status-text');
+        const tensionFill    = document.getElementById('tension-fill');
+        const tensionValue   = document.getElementById('tension-value');
+        const colorPicker    = document.getElementById('color-picker');
+        const colorHex       = document.getElementById('color-hex');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const fpsCounter     = document.getElementById('fps-counter');
+        // ═══════════════════════════════════════════════════════
+        //  THREE.JS SCENE
+        // ═══════════════════════════════════════════════════════
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x08080f);
+        scene.fog = new THREE.FogExp2(0x08080f, 0.028);
+        const camera = new THREE.PerspectiveCamera(
+            55,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            120
+        );
+        camera.position.set(0, 2.5, 12);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+        // Orbit controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping  = true;
+        controls.dampingFactor  = 0.06;
+        controls.enablePan      = false;
+        controls.minDistance     = 4;
+        controls.maxDistance     = 28;
+        controls.target.set(0, 1.8, 0);
+        controls.autoRotate      = true;
+        controls.autoRotateSpeed = 0.4;
+        // Subtle ambient light (not strictly needed for points, but keeps scene setup complete)
+        scene.add(new THREE.AmbientLight(0x222244, 0.5));
+        // Ground grid for spatial reference
+        const gridHelper = new THREE.GridHelper(50, 50, 0x111125, 0x0b0b18);
+        gridHelper.position.y = -2.5;
+        gridHelper.material.opacity = 0.45;
+        gridHelper.material.transparent = true;
+        scene.add(gridHelper);
+        // ═══════════════════════════════════════════════════════
+        //  PARTICLE TEXTURE
+        // ═══════════════════════════════════════════════════════
+        function createParticleTexture() {
+            const size = 64;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const half = size / 2;
+            const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
+            gradient.addColorStop(0.0, 'rgba(255,255,255,1.0)');
+            gradient.addColorStop(0.15, 'rgba(255,255,255,0.85)');
+            gradient.addColorStop(0.45, 'rgba(255,255,255,0.35)');
+            gradient.addColorStop(1.0, 'rgba(255,255,255,0.0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, size, size);
+            return new THREE.CanvasTexture(canvas);
+        }
+        // ═══════════════════════════════════════════════════════
+        //  PARTICLE SYSTEM
+        // ═══════════════════════════════════════════════════════
+        const geometry        = new THREE.BufferGeometry();
+        const currentPos      = new Float32Array(PARTICLE_COUNT * 3);
+        const targetPos       = new Float32Array(PARTICLE_COUNT * 3);
+        // Spawn everything at origin initially
+        for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+            currentPos[i] = (Math.random() - 0.5) * 0.05;
+            targetPos[i]  = 0;
+        }
+        geometry.setAttribute('position', new THREE.BufferAttribute(currentPos, 3));
+        const material = new THREE.PointsMaterial({
+            color:           particleColor,
+            size:            0.12,
+            map:             createParticleTexture(),
+            transparent:     true,
+            opacity:         0.92,
+            blending:        THREE.AdditiveBlending,
+            depthWrite:      false,
+            sizeAttenuation: true,
+        });
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
+        // ═══════════════════════════════════════════════════════
+        //  SHAPE GENERATORS
+        //  Each returns a Float32Array of length PARTICLE_COUNT*3
+        // ═══════════════════════════════════════════════════════
+        function generateHeart(n) {
+            const p = new Float32Array(n * 3);
+            for (let i = 0; i < n; i++) {
+                const t  = (i / n) * Math.PI * 2;
+                const s  = 0.17;
+                const jx = (Math.random() - 0.5) * 0.28;
+                const jy = (Math.random() - 0.5) * 0.28;
+                const x  = s * 16 * Math.pow(Math.sin(t), 3) + jx;
+                const y  = s * (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) + jy;
+                const z  = (Math.random() - 0.5) * 1.1;
+                p[i*3]   = x;
+                p[i*3+1] = y + 2.2;
+                p[i*3+2] = z;
+            }
+            return p;
+        }
+        function generateFlower(n) {
+            const p = new Float32Array(n * 3);
+            const centerN = Math.floor(n * 0.16);
+            const petalN  = n - centerN;
+            const petals  = 5;
+            // Center disk
+            for (let i = 0; i < centerN; i++) {
+                const a = Math.random() * Math.PI * 2;
+                const r = Math.sqrt(Math.random()) * 0.85;
+                p[i*3]   = r * Math.cos(a);
+                p[i*3+1] = r * Math.sin(a) + 2;
+                p[i*3+2] = (Math.random() - 0.5) * 0.4;
+            }
+            // Petals
+            for (let i = 0; i < petalN; i++) {
+                const idx = centerN + i;
+                const t   = (i / petalN) * Math.PI * 2;
+                const r   = 2.8 * Math.abs(Math.cos(petals * t)) + 0.6 + Math.random() * 0.45;
+                p[idx*3]   = r * Math.cos(t) + (Math.random() - 0.5) * 0.25;
+                p[idx*3+1] = r * Math.sin(t) + 2 + (Math.random() - 0.5) * 0.25;
+                p[idx*3+2] = (Math.random() - 0.5) * 1.0;
+            }
+            return p;
+        }
+        function generateSaturn(n) {
+            const p = new Float32Array(n * 3);
+            const sphereN = Math.floor(n * 0.52);
+            const ringN   = n - sphereN;
+            // Planet sphere
+            for (let i = 0; i < sphereN; i++) {
+                const phi   = Math.acos(2 * Math.random() - 1);
+                const theta = Math.random() * Math.PI * 2;
+                const r     = 1.6 + (Math.random() - 0.5) * 0.15;
+                p[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+                p[i*3+1] = r * Math.cos(phi) + 2;
+                p[i*3+2] = r * Math.sin(phi) * Math.sin(theta);
+            }
+            // Ring disk (tilted)
+            const tiltAngle = 0.42;
+            const cosT = Math.cos(tiltAngle);
+            const sinT = Math.sin(tiltAngle);
+            for (let i = 0; i < ringN; i++) {
+                const idx   = sphereN + i;
+                const theta = Math.random() * Math.PI * 2;
+                const r     = 2.6 + Math.random() * 1.8;
+                const lx    = r * Math.cos(theta);
+                const ly    = (Math.random() - 0.5) * 0.06;
+                const lz    = r * Math.sin(theta);
+                // Apply tilt around X axis
+                p[idx*3]   = lx;
+                p[idx*3+1] = ly * cosT - lz * sinT + 2;
+                p[idx*3+2] = ly * sinT + lz * cosT;
+            }
+            return p;
+        }
+        function generateBuddha(n) {
+            const p   = new Float32Array(n * 3);
+            let   idx = 0;
+            const alloc = {
+                topKnot:   Math.floor(n * 0.04),
+                head:      Math.floor(n * 0.11),
+                neck:      Math.floor(n * 0.03),
+                shoulders: Math.floor(n * 0.11),
+                torso:     Math.floor(n * 0.26),
+                arms:      Math.floor(n * 0.10),
+                lap:       Math.floor(n * 0.22),
+            };
+            alloc.base = n - Object.values(alloc).reduce((a,b) => a+b, 0);
+            // Ushnisha (top knot)
+            for (let i = 0; i < alloc.topKnot; i++) {
+                const phi   = Math.acos(2 * Math.random() - 1);
+                const theta = Math.random() * Math.PI * 2;
+                const r     = 0.28;
+                p[idx*3]   = r * Math.sin(phi) * Math.cos(theta);
+                p[idx*3+1] = r * Math.cos(phi) + 4.65;
+                p[idx*3+2] = r * Math.sin(phi) * Math.sin(theta);
+                idx++;
+            }
+            // Head
+            for (let i = 0; i < alloc.head; i++) {
+                const phi   = Math.acos(2 * Math.random() - 1);
+                const theta = Math.random() * Math.PI * 2;
+                const r     = 0.56;
+                p[idx*3]   = r * Math.sin(phi) * Math.cos(theta);
+                p[idx*3+1] = r * Math.cos(phi) + 3.85;
+                p[idx*3+2] = r * Math.sin(phi) * Math.sin(theta) * 0.82;
+                idx++;
+            }
+            // Neck
+            for (let i = 0; i < alloc.neck; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const r     = 0.32 + Math.random() * 0.08;
+                p[idx*3]   = r * Math.cos(theta);
+                p[idx*3+1] = 3.15 + Math.random() * 0.18;
+                p[idx*3+2] = r * Math.sin(theta) * 0.7;
+                idx++;
+            }
+            // Shoulders
+            for (let i = 0; i < alloc.shoulders; i++) {
+                const side = Math.random() > 0.5 ? 1 : -1;
+                const phi  = Math.random() * Math.PI;
+                const r    = 0.35 + Math.random() * 0.2;
+                p[idx*3]   = side * (0.95 + r * Math.sin(phi));
+                p[idx*3+1] = 2.7 + r * Math.cos(phi) * 0.35;
+                p[idx*3+2] = (Math.random() - 0.5) * 0.55;
+                idx++;
+            }
+            // Torso (tapered cylinder)
+            for (let i = 0; i < alloc.torso; i++) {
+                const t     = Math.random();                       // 0 = bottom, 1 = top
+                const y     = 1.2 + t * 1.7;
+                const wFact = 1.0 + 0.25 * Math.sin(t * Math.PI); // widest at middle
+                const theta = Math.random() * Math.PI * 2;
+                const rx    = 1.0 * wFact;
+                const rz    = 0.6 * wFact;
+                const rr    = Math.sqrt(Math.random());
+                p[idx*3]   = rx * rr * Math.cos(theta);
+                p[idx*3+1] = y;
+                p[idx*3+2] = rz * rr * Math.sin(theta);
+                idx++;
+            }
+            // Arms (folded on lap)
+            for (let i = 0; i < alloc.arms; i++) {
+                const side = Math.random() > 0.5 ? 1 : -1;
+                const t    = Math.random();
+                const x    = side * (1.15 - t * 0.85);
+                const y    = 2.55 - t * 1.2;
+                p[idx*3]   = x + (Math.random() - 0.5) * 0.18;
+                p[idx*3+1] = y;
+                p[idx*3+2] = (Math.random() - 0.5) * 0.45 + t * 0.25;
+                idx++;
+            }
+            // Lap (crossed legs, wide flattened ellipsoid)
+            for (let i = 0; i < alloc.lap; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const rr    = Math.sqrt(Math.random());
+                p[idx*3]   = 1.65 * rr * Math.cos(theta);
+                p[idx*3+1] = 0.3 + Math.random() * 0.65;
+                p[idx*3+2] = 1.05 * rr * Math.sin(theta);
+                idx++;
+            }
+            // Base platform
+            for (let i = 0; i < alloc.base; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const r     = Math.sqrt(Math.random()) * 2.0;
+                p[idx*3]   = r * Math.cos(theta);
+                p[idx*3+1] = Math.random() * 0.18;
+                p[idx*3+2] = r * Math.sin(theta);
+                idx++;
+            }
+            return p;
+        }
+        function generateFireworks(n) {
+            const p      = new Float32Array(n * 3);
+            const bursts = 6;
+            const perB   = Math.floor(n / bursts);
+            // Pre-generate burst centers
+            const centers = [];
+            for (let b = 0; b < bursts; b++) {
+                centers.push({
+                    x: (Math.random() - 0.5) * 7,
+                    y: 1.5 + Math.random() * 4.5,
+                    z: (Math.random() - 0.5) * 5,
+                    r: 1.0 + Math.random() * 1.6,
+                });
+            }
+            for (let b = 0; b < bursts; b++) {
+                const c = centers[b];
+                for (let i = 0; i < perB; i++) {
+                    const idx   = b * perB + i;
+                    const phi   = Math.acos(2 * Math.random() - 1);
+                    const theta = Math.random() * Math.PI * 2;
+                    const r     = Math.pow(Math.random(), 0.45) * c.r;
+                    p[idx*3]   = c.x + r * Math.sin(phi) * Math.cos(theta);
+                    p[idx*3+1] = c.y + r * Math.sin(phi) * Math.sin(theta);
+                    p[idx*3+2] = c.z + r * Math.cos(phi);
+                }
+            }
+            // Remaining particles — trail/sparkle
+            for (let i = bursts * perB; i < n; i++) {
+                const b = centers[Math.floor(Math.random() * bursts)];
+                const phi   = Math.acos(2 * Math.random() - 1);
+                const theta = Math.random() * Math.PI * 2;
+                const r     = b.r + Math.random() * 0.6;
+                p[i*3]   = b.x + r * Math.sin(phi) * Math.cos(theta);
+                p[i*3+1] = b.y + r * Math.sin(phi) * Math.sin(theta) - Math.random() * 0.8;
+                p[i*3+2] = b.z + r * Math.cos(phi);
+            }
+            return p;
+        }
+        // Generator registry
+        const generators = { heart: generateHeart, flower: generateFlower, saturn: generateSaturn, buddha: generateBuddha, fireworks: generateFireworks };
+        // ═══════════════════════════════════════════════════════
+        //  TEMPLATE SWITCHING
+        // ═══════════════════════════════════════════════════════
+        function setTemplate(name) {
+            if (!generators[name]) return;
+            currentTemplate = name;
+            const fresh = generators[name](PARTICLE_COUNT);
+            targetPos.set(fresh);
+            document.querySelectorAll('#template-buttons button').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.template === name);
+            });
+        }
+        // Initial template
+        setTemplate('heart');
+        // Button listeners
+        document.querySelectorAll('#template-buttons button').forEach(btn => {
+            btn.addEventListener('click', () => setTemplate(btn.dataset.template));
+        });
+        // ═══════════════════════════════════════════════════════
+        //  COLOR PICKER
+        // ═══════════════════════════════════════════════════════
+        colorPicker.addEventListener('input', (e) => {
+            particleColor.set(e.target.value);
+            material.color.copy(particleColor);
+            colorHex.textContent = e.target.value;
+        });
+        // ═══════════════════════════════════════════════════════
+        //  HAND TRACKING  (MediaPipe Hands)
+        // ═══════════════════════════════════════════════════════
+        function calculateTension(landmarks) {
+            // Palm reference: landmark 9 (middle-finger MCP)
+            const palm = landmarks[9];
+            const tipIds = [4, 8, 12, 16, 20]; // thumb tip, index tip, middle tip, ring tip, pinky tip
+            let sum = 0;
+            for (const id of tipIds) {
+                const tip = landmarks[id];
+                const dx  = tip.x - palm.x;
+                const dy  = tip.y - palm.y;
+                const dz  = (tip.z || 0) - (palm.z || 0);
+                sum += Math.sqrt(dx * dx + dy * dy + dz * dz);
+            }
+            const avg = sum / tipIds.length;
+            // Normalise — closed fist ≈ 0.06-0.10, open hand ≈ 0.22-0.32
+            return Math.max(0, Math.min(1, (avg - 0.06) / 0.22));
+        }
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                handsDetected     = true;
+                lastHandTimestamp = performance.now();
+                let maxT = 0;
+                for (const lm of results.multiHandLandmarks) {
+                    maxT = Math.max(maxT, calculateTension(lm));
+                }
+                rawTension = maxT;
+                const count = results.multiHandLandmarks.length;
+                handStatusEl.classList.add('detected');
+                handStatusText.textContent = `${count} hand${count > 1 ? 's' : ''} detected`;
+            } else {
+                if (performance.now() - lastHandTimestamp > IDLE_TIMEOUT_MS) {
+                    handsDetected = false;
+                    handStatusEl.classList.remove('detected');
+                    handStatusText.textContent = 'No hands detected';
+                }
+            }
+        }
+        async function initHandTracking() {
+            try {
+                if (typeof window.Hands === 'undefined' || typeof window.Camera === 'undefined') {
+                    throw new Error('MediaPipe libraries failed to load from CDN.');
+                }
+                const hands = new window.Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+                });
+                hands.setOptions({
+                    maxNumHands:           2,
+                    modelComplexity:       1,
+                    minDetectionConfidence: 0.6,
+                    minTrackingConfidence:  0.5,
+                });
+                hands.onResults(onHandResults);
+                const mpCamera = new window.Camera(videoEl, {
+                    onFrame: async () => { await hands.send({ image: videoEl }); },
+                    width:  640,
+                    height: 480,
+                });
+                await mpCamera.start();
+                // Show webcam preview
+                videoEl.classList.add('visible');
+                webcamLabel.classList.add('visible');
+                handStatusText.textContent = 'No hands detected';
+                console.log('[ParticleGestures] Hand tracking initialised.');
+            } catch (err) {
+                console.error('[ParticleGestures] Hand tracking failed:', err);
+                handStatusText.textContent = 'Camera unavailable';
+                handStatusEl.style.borderColor = 'rgba(255,60,60,0.25)';
+                // Check for permission error specifically
+                if (err.name === 'NotAllowedError') {
+                    console.error('[ParticleGestures] Camera permission denied by user.');
+                    handStatusText.textContent = 'Camera permission denied';
+                } else if (err.name === 'NotFoundError') {
+                    console.error('[ParticleGestures] No camera device found.');
+                    handStatusText.textContent = 'No camera found';
+                }
+            }
+        }
+        // ═══════════════════════════════════════════════════════
+        //  RENDER LOOP
+        // ═══════════════════════════════════════════════════════
+        const clock = new THREE.Clock();
+        // FPS tracking
+        let frameCount = 0;
+        let fpsAccum   = 0;
+        let lastFpsTick = performance.now();
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+            const posArr = geometry.attributes.position.array;
+            // ── Smooth tension ──
+            smoothTension += (rawTension - smoothTension) * SCALE_LERP;
+            // ── UI: tension meter ──
+            const pct = Math.round(smoothTension * 100);
+            tensionFill.style.width = pct + '%';
+            tensionValue.textContent = pct + ' %';
+            // ── Scale factor ──
+            let goalScale;
+            if (handsDetected) {
+                // Closed fist (0) → 0.35x, Open hand (1) → 1.6x
+                goalScale = 0.35 + smoothTension * 1.25;
+            } else {
+                // Gentle idle breathing
+                goalScale = 1.0 + 0.1 * Math.sin(time * 0.7);
+            }
+            const curScale = particles.scale.x;
+            const newScale = curScale + (goalScale - curScale) * 0.055;
+            particles.scale.set(newScale, newScale, newScale);
+            // ── Dynamic particle size based on tension ──
+            material.size = 0.10 + smoothTension * 0.04;
+            // ── Lerp positions toward targets + ambient noise ──
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const i3 = i * 3;
+                // Lerp
+                posArr[i3]     += (targetPos[i3]     - posArr[i3])     * LERP_SPEED;
+                posArr[i3 + 1] += (targetPos[i3 + 1] - posArr[i3 + 1]) * LERP_SPEED;
+                posArr[i3 + 2] += (targetPos[i3 + 2] - posArr[i3 + 2]) * LERP_SPEED;
+                // Subtle floating noise (per-particle frequency offset)
+                const freq  = 0.28 + (i % 11) * 0.04;
+                const amp   = 0.012;
+                posArr[i3]     += Math.sin(time * freq + i * 0.097)  * amp;
+                posArr[i3 + 1] += Math.cos(time * freq * 0.73 + i * 0.131) * amp;
+                posArr[i3 + 2] += Math.sin(time * freq * 0.51 + i * 0.167) * amp;
+            }
+            geometry.attributes.position.needsUpdate = true;
+            // ── Rotation ──
+            if (!handsDetected) {
+                particles.rotation.y += 0.0025;
+            } else {
+                particles.rotation.y += 0.0006;
+            }
+            controls.update();
+            renderer.render(scene, camera);
+            // ── FPS counter ──
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFpsTick >= 1000) {
+                fpsCounter.textContent = `${frameCount} fps`;
+                frameCount  = 0;
+                lastFpsTick = now;
+            }
+        }
+        // ═══════════════════════════════════════════════════════
+        //  RESIZE HANDLER
+        // ═══════════════════════════════════════════════════════
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        // ═══════════════════════════════════════════════════════
+        //  BOOTSTRAP
+        // ═══════════════════════════════════════════════════════
+        async function boot() {
+            // Start rendering immediately
+            animate();
+            // Allow first frame to paint, then remove overlay
+            await new Promise(r => setTimeout(r, 400));
+            loadingOverlay.classList.add('hidden');
+            // Initialise hand tracking in background
+            await initHandTracking();
+        }
+        boot();
+    </script>
+</body>
+</html>
